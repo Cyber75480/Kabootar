@@ -1,1 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Private Chat</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: Arial; background:#111; color:#fff; }
+    #chat { height:300px; overflow:auto; border:1px solid #444; padding:10px; }
+    input, button { padding:10px; margin:5px; width:90%; }
+  </style>
+</head>
+<body>
 
+<h3>🔐 Private 1-to-1 Chat</h3>
+
+<input id="name" placeholder="Your name">
+<input id="room" placeholder="Room ID (same for both)">
+<input id="key" placeholder="Secret key (DON'T SHARE)" type="password">
+
+<div id="chat"></div>
+
+<input id="msg" placeholder="Message">
+<button onclick="send()">Send</button>
+
+<script>
+const DB = "https://kabootar-c38d8-default-rtdb.asia-southeast1.firebasedatabase.app";
+
+async function getKey(secret) {
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey(
+    "raw", enc.encode(secret), "PBKDF2", false, ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: enc.encode("salt"), iterations: 100000, hash: "SHA-256" },
+    baseKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+async function encrypt(text, secret) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await getKey(secret);
+  const enc = new TextEncoder().encode(text);
+  const cipher = await crypto.subtle.encrypt({ name:"AES-GCM", iv }, key, enc);
+  return {
+    iv: Array.from(iv),
+    data: Array.from(new Uint8Array(cipher))
+  };
+}
+
+async function decrypt(data, secret) {
+  const key = await getKey(secret);
+  const iv = new Uint8Array(data.iv);
+  const buf = new Uint8Array(data.data);
+  const plain = await crypto.subtle.decrypt({ name:"AES-GCM", iv }, key, buf);
+  return new TextDecoder().decode(plain);
+}
+
+async function send() {
+  const name = name.value;
+  const roomId = room.value;
+  const secret = key.value;
+  const text = msg.value;
+
+  const encrypted = await encrypt(text, secret);
+
+  fetch(`${DB}/rooms/${roomId}.json`, {
+    method: "POST",
+    body: JSON.stringify({
+      name,
+      encrypted,
+      time: Date.now()
+    })
+  });
+
+  msg.value = "";
+}
+
+let last = 0;
+setInterval(async () => {
+  if (!room.value || !key.value) return;
+  const res = await fetch(`${DB}/rooms/${room.value}.json`);
+  const data = await res.json();
+  if (!data) return;
+
+  chat.innerHTML = "";
+  for (let k in data) {
+    if (data[k].time > last) {
+      try {
+        const text = await decrypt(data[k].encrypted, key.value);
+        chat.innerHTML += `<p><b>${data[k].name}:</b> ${text}</p>`;
+        last = data[k].time;
+      } catch {}
+    }
+  }
+}, 1500);
+</script>
+
+</body>
+  </html>
